@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>AccessPulse | IT Access Control Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script>
+        let users = JSON.parse(localStorage.getItem('ap_users')) || [];
+        let apps = JSON.parse(localStorage.getItem('ap_apps')) || [];
+        let assignments = JSON.parse(localStorage.getItem('ap_assignments')) || [];
+        let editingUserId = null;
+
+        function applyTheme() {
+            document.documentElement.classList.add('dark');
+            document.body.className = 'bg-slate-950 text-slate-100 transition-colors duration-300';
+        }
+
+        function checkPin() {
+            if (document.getElementById('pinInput').value === "1234") {
+                document.getElementById('loginScreen').classList.add('hidden');
+                document.getElementById('mainContent').classList.remove('hidden');
+                applyTheme();
+                renderData();
+            } else { alert("Incorrect PIN."); }
+        }
+
+        window.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                if (!document.getElementById('loginScreen').classList.contains('hidden')) checkPin();
+                else if (!document.getElementById('view-dashboard').classList.contains('hidden')) quickGrant();
+                else if (!document.getElementById('registerModal').classList.contains('hidden')) saveManual();
+            }
+        });
+
+        function switchTab(tab) {
+            document.querySelectorAll('.view-section').forEach(s => s.classList.add('hidden'));
+            document.querySelectorAll('nav button').forEach(b => b.classList.remove('tab-active'));
+            document.getElementById('view-' + tab).classList.remove('hidden');
+            document.getElementById('tab-' + tab).classList.add('tab-active');
+            renderData();
+        }
+
+        function launchApp(url) {
+            if (!url) return;
+            let cleanUrl = url.trim();
+            if (!/^https?:\/\//i.test(cleanUrl)) cleanUrl = 'https://' + cleanUrl;
+            window.open(cleanUrl, '_blank', 'noopener,noreferrer');
+        }
+
+        function secureReset() {
+            if (prompt("ENTER PIN (1234):") === "1234") {
+                if (confirm("CRITICAL: Wipe all data?")) { localStorage.clear(); location.reload(); }
+            }
+        }
+    </script>
+    <style>
+        .dark .bg-white {
+            background-color: #1e293b !important;
+            border-color: #334155 !important;
+        }
+
+        .dark .text-slate-800,
+        .dark .text-slate-900 {
+            color: #f1f5f9 !important;
+        }
+
+        .tab-active {
+            border-bottom: 3px solid #3b82f6;
+            color: #3b82f6 !important;
+            font-weight: 800;
+        }
+
+        .launch-cursor {
+            cursor: pointer;
+            transition: transform 0.1s ease;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-950 text-slate-100">
+    <div id="loginScreen" class="fixed inset-0 bg-slate-900 flex items-center justify-center p-4 z-[200]">
+        <div class="bg-white p-10 rounded-[2.5rem] shadow-2xl max-w-sm w-full text-center text-slate-900">
+            <h2 class="text-3xl font-black mb-4">AccessPulse</h2>
+            <input id="pinInput" type="password" placeholder="••••"
+                class="w-full text-center text-4xl border-2 p-4 rounded-2xl mb-4 outline-none">
+            <button onclick="checkPin()" class="w-full bg-blue-600 text-white p-5 rounded-2xl font-bold">Unlock</button>
+        </div>
+    </div>
+
+    <div id="mainContent" class="hidden">
+        <nav
+            class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50 h-20 flex items-center px-6 justify-between">
+            <h1 class="text-2xl font-black text-white">AccessPulse</h1>
+            <div class="flex gap-6 items-center text-slate-400">
+                <button onclick="switchTab('dashboard')" id="tab-dashboard"
+                    class="tab-active text-[10px] uppercase font-black">Dashboard</button>
+                <button onclick="switchTab('audit')" id="tab-audit"
+                    class="text-[10px] uppercase font-black hover:text-white transition-colors">Logs</button>
+                <button onclick="switchTab('users')" id="tab-users"
+                    class="text-[10px] uppercase font-black hover:text-white transition-colors">Users</button>
+                <button onclick="switchTab('apps')" id="tab-apps"
+                    class="text-[10px] uppercase font-black hover:text-white transition-colors">Apps</button>
+                <button onclick="switchTab('expired')" class="relative p-2 hover:text-rose-500 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-width="2"
+                            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9">
+                        </path>
+                    </svg>
+                    <span id="notifBadge"
+                        class="absolute top-0 right-0 bg-rose-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full hidden">0</span>
+                </button>
+            </div>
+        </nav>
+
+        <main class="max-w-7xl mx-auto p-10">
+            <div id="view-dashboard" class="view-section">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                    <div onclick="switchTab('audit')"
+                        class="bg-slate-900 p-8 rounded-[2rem] border border-slate-800 cursor-pointer hover:scale-[1.01] transition-transform">
+                        <span class="text-xs font-black uppercase text-slate-500">Active</span>
+                        <h3 id="stat-active" class="text-5xl font-black text-emerald-500">0</h3>
+                    </div>
+                    <div onclick="switchTab('audit')"
+                        class="bg-slate-900 p-8 rounded-[2rem] border border-slate-800 cursor-pointer hover:scale-[1.01] transition-transform">
+                        <span class="text-xs font-black uppercase text-slate-500">Revoked</span>
+                        <h3 id="stat-revoked" class="text-5xl font-black text-slate-500">0</h3>
+                    </div>
+                    <div onclick="switchTab('expired')"
+                        class="bg-slate-900 p-8 rounded-[2rem] border border-slate-800 cursor-pointer hover:scale-[1.01] transition-transform">
+                        <span class="text-xs font-black uppercase text-slate-500">Expired</span>
+                        <h3 id="stat-expired" class="text-5xl font-black text-rose-500">0</h3>
+                    </div>
+                </div>
+                <div
+                    class="bg-slate-900 p-8 rounded-[2.5rem] border border-slate-800 grid grid-cols-1 md:grid-cols-7 gap-4">
+                    <select id="form-user" onchange="updateFormOptions(); autoSelectDept()"
+                        class="bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                        <option disabled selected value="">Select User</option>
+                    </select>
+                    <select id="form-app"
+                        class="bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                        <option disabled selected value="">Choose App</option>
+                    </select>
+                    <select id="form-role"
+                        class="bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                        <option disabled selected value="">Dept</option>
+                    </select>
+                    <input id="form-auth" type="text" placeholder="Authorized By"
+                        class="bg-slate-800 p-4 rounded-xl text-white border border-slate-700">
+                    <select id="expiryType"
+                        onchange="document.getElementById('customExpiryBox').classList.toggle('hidden', this.value !== 'custom')"
+                        class="bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                        <option value="auto">1 Year</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                    <div id="customExpiryBox" class="hidden"><input type="date" id="form-custom-expiry"
+                            class="bg-slate-800 p-4 rounded-xl w-full text-white border border-slate-700"></div>
+                    <button onclick="quickGrant()"
+                        class="bg-blue-600 p-4 rounded-xl font-black text-white active:scale-95 transition-all">Grant
+                        Access</button>
+                </div>
+            </div>
+
+            <div id="view-audit" class="view-section hidden">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-4xl font-black uppercase text-white tracking-tighter">Access Logs</h2>
+                    <div class="flex gap-4">
+                        <input type="text" id="logSearch" oninput="renderData()" placeholder="Filter logs..."
+                            class="bg-slate-800 p-4 rounded-xl w-48 text-white outline-none border border-slate-800">
+                        <select id="statusFilter" onchange="renderData()"
+                            class="bg-slate-800 p-4 rounded-xl text-white outline-none text-xs font-bold uppercase border border-slate-800">
+                            <option value="all">All Access</option>
+                            <option value="Active">Active Only</option>
+                            <option value="Revoked">Revoked Only</option>
+                            <option value="Expired">Expired Only</option>
+                        </select>
+                        <button onclick="exportLogsCSV()"
+                            class="bg-white text-slate-900 p-4 rounded-xl font-black text-xs uppercase hover:bg-slate-200 transition-all">Export
+                            CSV</button>
+                    </div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden overflow-x-auto">
+                    <table class="w-full text-left min-w-[1100px]">
+                        <thead class="bg-slate-800 text-[10px] uppercase font-black text-slate-400">
+                            <tr>
+                                <th class="p-6">Employee</th>
+                                <th class="p-6">Resource</th>
+                                <th class="p-6">Role/Dept</th>
+                                <th class="p-6">Auth By</th>
+                                <th class="p-6">Grant Date</th>
+                                <th class="p-6">Expiry</th>
+                                <th class="p-6 text-center">Status</th>
+                                <th class="p-6 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audit-logs" class="divide-y divide-slate-800 text-white"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="view-users" class="view-section hidden">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-4xl font-black uppercase text-white tracking-tighter">User Directory</h2>
+                    <div class="flex gap-4">
+                        <input type="text" id="userSearch" oninput="renderData()"
+                            placeholder="Search Name, ID, Manager..."
+                            class="bg-slate-900 border border-slate-800 p-4 rounded-xl text-white outline-none w-80 focus:border-blue-600 transition-all">
+                        <label
+                            class="bg-slate-800 text-slate-100 p-4 rounded-xl cursor-pointer text-xs font-black uppercase border border-slate-700 hover:bg-slate-700 transition-all">Import<input
+                                type="file" onchange="genericImport(this.files[0], 'user')" class="hidden"
+                                accept=".csv, .xlsx, .xls"></label>
+                        <button onclick="openModal('user')"
+                            class="bg-blue-600 p-4 rounded-xl font-black text-white text-xs uppercase hover:bg-blue-700 transition-all">+
+                            New User</button>
+                    </div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden overflow-x-auto">
+                    <table class="w-full text-left min-w-[1200px]">
+                        <thead class="bg-slate-800 text-[10px] uppercase font-black text-slate-400">
+                            <tr>
+                                <th class="p-6">Emp ID</th>
+                                <th class="p-6">Name</th>
+                                <th class="p-6">Email</th>
+                                <th class="p-6">Dept</th>
+                                <th class="p-6">Manager</th>
+                                <th class="p-6 text-center">Status</th>
+                                <th class="p-6">Apps</th>
+                                <th class="p-6 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="userTableBody" class="text-white divide-y divide-slate-800"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="view-apps" class="view-section hidden">
+                <div class="flex justify-between items-center mb-10">
+                    <h2 class="text-4xl font-black uppercase text-white tracking-tighter">Applications</h2>
+                    <div class="flex gap-4">
+                        <input type="text" id="appSearch" oninput="renderData()" placeholder="Search Apps..."
+                            class="bg-slate-900 border border-slate-800 p-4 rounded-xl text-white outline-none w-64 focus:border-blue-600 transition-all">
+                        <label
+                            class="bg-slate-800 text-slate-100 p-4 rounded-xl cursor-pointer text-xs font-black uppercase border border-slate-700 hover:bg-slate-700 transition-all">Import
+                            Apps<input type="file" onchange="genericImport(this.files[0], 'app')" class="hidden"
+                                accept=".csv, .xlsx, .xls"></label>
+                        <button onclick="openModal('app')"
+                            class="bg-slate-700 p-4 rounded-xl font-black text-white text-xs uppercase hover:bg-slate-600 transition-all">+
+                            New App</button>
+                        <button onclick="secureReset()"
+                            class="bg-rose-900/20 text-rose-500 p-4 rounded-xl border border-rose-900 font-black text-xs uppercase">Hard
+                            Reset</button>
+                    </div>
+                </div>
+                <div id="appGrid" class="grid grid-cols-2 md:grid-cols-5 gap-6"></div>
+            </div>
+
+            <div id="view-expired" class="view-section hidden">
+                <h2 class="text-4xl font-black uppercase text-rose-600 mb-6 tracking-tighter">Expired Access</h2>
+                <div class="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden">
+                    <table class="w-full text-left min-w-[1000px]">
+                        <thead class="bg-slate-800 text-[10px] uppercase font-black text-slate-400">
+                            <tr>
+                                <th class="p-6">Employee</th>
+                                <th class="p-6">Resource</th>
+                                <th class="p-6 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="expiredTableBody" class="divide-y divide-slate-800"></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="registerModal"
+        class="hidden fixed inset-0 z-[250] flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-sm">
+        <div class="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] max-w-md w-full">
+            <h3 id="modalTitle" class="text-2xl font-black text-white mb-6 uppercase">Register</h3>
+            <div id="userFields" class="space-y-4">
+                <input id="m-id" type="text" placeholder="Employee ID"
+                    class="w-full bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                <input id="m-name" type="text" placeholder="Full Name"
+                    class="w-full bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                <input id="m-email" type="text" placeholder="Email Address"
+                    class="w-full bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                <input id="m-dept" type="text" placeholder="Department"
+                    class="w-full bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                <input id="m-manager" type="text" placeholder="Reporting Manager"
+                    class="w-full bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                <select id="m-status"
+                    class="w-full bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700 hidden">
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                </select>
+            </div>
+            <div id="appFields" class="hidden space-y-4">
+                <input id="m-appname" type="text" placeholder="App Name"
+                    class="w-full bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+                <input id="m-link" type="text" placeholder="Launch URL"
+                    class="w-full bg-slate-800 p-4 rounded-xl text-white outline-none border border-slate-700">
+            </div>
+            <div class="flex gap-4 mt-8">
+                <button onclick="editingUserId=null; document.getElementById('registerModal').classList.add('hidden')"
+                    class="flex-1 p-4 text-slate-500 font-bold uppercase">Cancel</button>
+                <button onclick="saveManual()"
+                    class="flex-1 bg-blue-600 p-4 rounded-xl text-white font-black uppercase">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="successModal"
+        class="hidden fixed inset-0 z-[300] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+        <div
+            class="bg-slate-900 border-2 border-emerald-500/50 rounded-[3rem] p-12 text-center max-w-sm w-full shadow-2xl">
+            <h3 id="successTitle" class="text-2xl font-black text-white mb-4 uppercase text-emerald-500">Success</h3>
+            <p id="successMsg" class="text-slate-400 mb-8">Process completed.</p>
+            <button onclick="document.getElementById('successModal').classList.add('hidden')"
+                class="w-full bg-emerald-600 text-white font-black py-5 rounded-2xl">DONE</button>
+        </div>
+    </div>
+
+    <script>
+        function renderData() {
+            let active = 0, revoked = 0, expiredCount = 0;
+            const term = (document.getElementById('userSearch')?.value || "").toLowerCase().trim();
+            const logS = (document.getElementById('logSearch')?.value || "").toLowerCase().trim();
+            const appS = (document.getElementById('appSearch')?.value || "").toLowerCase().trim();
+            const statF = document.getElementById('statusFilter')?.value || "all";
+
+            const expItemsRaw = assignments.filter(a => a.status === 'Active' && new Date() > new Date(a.expiry));
+
+            assignments.forEach(a => {
+                const sl = (new Date() > new Date(a.expiry) && a.status === 'Active') ? 'Expired' : a.status;
+                if (sl === 'Active') active++; else if (sl === 'Revoked') revoked++; else if (sl === 'Expired') expiredCount++;
+            });
+
+            document.getElementById('stat-active').innerText = active;
+            document.getElementById('stat-revoked').innerText = revoked;
+            document.getElementById('stat-expired').innerText = expiredCount;
+            document.getElementById('notifBadge').innerText = expItemsRaw.length;
+            document.getElementById('notifBadge').classList.toggle('hidden', expItemsRaw.length === 0);
+
+            // USER TABLE REFRESH (LOCKED FILTER)
+            const userTable = document.getElementById('userTableBody');
+            userTable.innerHTML = "";
+            users.forEach(u => {
+                const matches = String(u.name || "").toLowerCase().includes(term) ||
+                    String(u.empID || "").toLowerCase().includes(term) ||
+                    String(u.manager || "").toLowerCase().includes(term) ||
+                    String(u.dept || "").toLowerCase().includes(term) ||
+                    String(u.email || "").toLowerCase().includes(term);
+
+                if (!term || matches) {
+                    const ua = assignments.filter(a => a.userId == u.id && a.status === 'Active');
+                    const appsHtml = ua.length > 0 ? `<select class="bg-slate-700 p-2 rounded-lg text-[10px] font-black uppercase text-white outline-none"><option selected>${ua.length} ACTIVE</option>${ua.map(a => `<option disabled>${a.appName}</option>`).join('')}</select>` : `<span class="text-[9px] font-bold text-slate-500 uppercase">None</span>`;
+                    const row = `<tr><td class="p-6 text-xs text-slate-400 font-bold">${u.empID || '—'}</td><td class="p-6 font-bold text-white">${u.name || 'Unknown'}</td><td class="p-6 text-xs text-blue-400 font-bold">${u.email || '—'}</td><td class="p-6 text-xs font-bold text-slate-500 uppercase">${u.dept || '—'}</td><td class="p-6 text-xs font-bold text-slate-400">${u.manager || '—'}</td><td class="p-6 text-center"><span class="px-3 py-1 bg-emerald-900/30 text-emerald-400 rounded-full text-[9px] font-black">${u.status || 'Active'}</span></td><td class="p-6">${appsHtml}</td><td class="p-6 text-right"><button onclick="editUser('${u.id}')" class="text-blue-500 text-[10px] font-black uppercase hover:underline">Edit</button></td></tr>`;
+                    userTable.insertAdjacentHTML('beforeend', row);
+                }
+            });
+
+            // LOGS
+            const logTable = document.getElementById('audit-logs');
+            logTable.innerHTML = "";
+            assignments.slice().reverse().forEach((a) => {
+                const sl = (new Date() > new Date(a.expiry) && a.status === 'Active') ? 'Expired' : a.status;
+                const matchTerm = String(a.userName || "").toLowerCase().includes(logS) || String(a.appName || "").toLowerCase().includes(logS);
+                const matchStatus = (statF === 'all' || sl === statF);
+                if (matchTerm && matchStatus) {
+                    const row = `<tr><td class="p-6 font-bold text-white">${a.userName}</td><td class="p-6 text-blue-400 font-black uppercase text-xs">${a.appName}</td><td class="p-6 text-xs text-slate-500 font-bold uppercase">${a.role}</td><td class="p-6 text-xs text-slate-400 uppercase font-bold">${a.authorizedBy}</td><td class="p-6 text-xs text-slate-500">${a.date}</td><td class="p-6 text-xs text-slate-500">${a.expiry}</td><td class="p-6 text-center"><span class="px-2 py-1 rounded-full text-[9px] font-black uppercase ${sl === 'Active' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-rose-900/30 text-rose-400'}">${sl}</span></td><td class="p-6 text-right">${sl === 'Active' ? `<button onclick="revokeNow(${assignments.indexOf(a)})" class="text-rose-600 text-[10px] font-black uppercase hover:underline">Revoke</button>` : '—'}</td></tr>`;
+                    logTable.insertAdjacentHTML('beforeend', row);
+                }
+            });
+
+            // APPS GRID
+            const appGrid = document.getElementById('appGrid');
+            appGrid.innerHTML = "";
+            apps.forEach(a => {
+                if (!appS || String(a.name || "").toLowerCase().includes(appS)) {
+                    const dom = (a.link || "").replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split('/')[0];
+                    const logo = dom ? `https://logo.clearbit.com/${dom}` : `https://ui-avatars.com/api/?name=${a.name}`;
+                    const card = `<div onclick="launchApp('${a.link}')" class="bg-slate-900 border border-slate-800 p-6 rounded-3xl text-center cursor-pointer hover:border-blue-500 transition-all"><img src="${logo}" onerror="this.src='https://ui-avatars.com/api/?name=${a.name}'" class="w-12 h-12 mx-auto mb-4 object-contain rounded-lg"><h4 class="font-black text-sm text-white">${a.name}</h4><span class="text-[8px] text-slate-500 uppercase mt-2 block">Launch ↗</span></div>`;
+                    appGrid.insertAdjacentHTML('beforeend', card);
+                }
+            });
+
+            document.getElementById('expiredTableBody').innerHTML = expItemsRaw.map((a) => `<tr><td class="p-6 font-bold text-white">${a.userName}</td><td class="p-6 font-black uppercase text-blue-400">${a.appName}</td><td class="p-6 text-right flex gap-2 justify-end"><button onclick="quickRenew(${assignments.indexOf(a)})" class="bg-emerald-600 text-white text-[8px] font-black uppercase px-3 py-1.5 rounded-lg">Auto-Renew</button></td></tr>`).join('');
+
+            document.getElementById('form-user').innerHTML = '<option disabled selected value="">Select User</option>' + users.map(u => `<option value="${u.id}">${u.name}</option>`).join('');
+            document.getElementById('form-role').innerHTML = '<option disabled selected value="">Dept</option>' + [...new Set(users.map(u => u.dept))].filter(d => d).map(d => `<option value="${d}">${d}</option>`).join('');
+        }
+
+        // 100% EFFICIENCY IMPORT ENGINE
+        function genericImport(file, type) {
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+                const h = rows[0].map(i => String(i).toLowerCase().trim());
+                if (type === 'user') {
+                    const nI = h.findIndex(x => x.includes('name') || x.includes('full')),
+                        idI = h.findIndex(x => x.includes('id') || x.includes('emp')),
+                        dI = h.findIndex(x => x.includes('dept') || x.includes('depart')),
+                        eI = h.findIndex(x => x.includes('mail')),
+                        mI = h.findIndex(x => x.includes('manager') || x.includes('report')),
+                        sI = h.findIndex(x => x.includes('status'));
+                    rows.slice(1).forEach(r => {
+                        if (r[nI]) users.push({
+                            id: Date.now() + Math.random(),
+                            empID: r[idI] || '—',
+                            name: r[nI],
+                            dept: r[dI] || '—',
+                            manager: r[mI] || '—',
+                            email: r[eI] || '—',
+                            status: r[sI] || 'Active'
+                        })
+                    });
+                    localStorage.setItem('ap_users', JSON.stringify(users));
+                } else {
+                    const nI = h.findIndex(x => x.includes('name') || x.includes('app')),
+                        lI = h.findIndex(x => x.includes('link') || x.includes('url') || x.includes('domain'));
+                    rows.slice(1).forEach(r => { if (r[nI]) apps.push({ id: Date.now() + Math.random(), name: r[nI], link: r[lI] || '' }) });
+                    localStorage.setItem('ap_apps', JSON.stringify(apps));
+                }
+                renderData(); alert("Import 100% Successful.");
+            }; reader.readAsArrayBuffer(file);
+        }
+
+        function editUser(userId) {
+            const u = users.find(x => x.id == userId);
+            editingUserId = userId;
+            openModal('user');
+            document.getElementById('modalTitle').innerText = "Edit User";
+            document.getElementById('m-id').value = u.empID;
+            document.getElementById('m-name').value = u.name;
+            document.getElementById('m-email').value = u.email;
+            document.getElementById('m-dept').value = u.dept;
+            document.getElementById('m-manager').value = u.manager;
+            document.getElementById('m-status').classList.remove('hidden');
+            document.getElementById('m-status').value = u.status;
+        }
+
+        function exportLogsCSV() {
+            let csv = "Employee,Resource,Role,Authorized By,Grant Date,Expiry,Status\n";
+            assignments.forEach(a => {
+                const sl = (new Date() > new Date(a.expiry) && a.status === 'Active') ? 'Expired' : a.status;
+                csv += `"${a.userName}","${a.appName}","${a.role}","${a.authorizedBy}","${a.date}","${a.expiry}","${sl}"\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = `Audit_Log_${new Date().toLocaleDateString()}.csv`; a.click();
+        }
+
+        function revokeNow(idx) {
+            const rev = prompt("Authorizer Name for Revocation:");
+            if (rev) {
+                const orig = assignments[idx];
+                assignments[idx].status = 'Revoked';
+                assignments.push({ ...orig, authorizedBy: "REVOKED BY: " + rev, status: 'Revoked', date: new Date().toLocaleDateString(), expiry: 'N/A' });
+                localStorage.setItem('ap_assignments', JSON.stringify(assignments));
+                renderData();
+            }
+        }
+
+        function openModal(t) {
+            editingUserId = null;
+            const isU = t === 'user';
+            document.getElementById('modalTitle').innerText = isU ? "Add User" : "Add App";
+            document.getElementById('userFields').classList.toggle('hidden', !isU);
+            document.getElementById('m-status').classList.add('hidden');
+            document.getElementById('appFields').classList.toggle('hidden', isU);
+            document.querySelectorAll('#registerModal input').forEach(i => i.value = "");
+            document.getElementById('registerModal').classList.remove('hidden');
+        }
+
+        function saveManual() {
+            const isU = !document.getElementById('userFields').classList.contains('hidden');
+            if (isU) {
+                const data = { empID: document.getElementById('m-id').value, name: document.getElementById('m-name').value, dept: document.getElementById('m-dept').value, manager: document.getElementById('m-manager').value, email: document.getElementById('m-email').value, status: document.getElementById('m-status').value || 'Active' };
+                if (editingUserId) {
+                    const idx = users.findIndex(x => x.id == editingUserId);
+                    users[idx] = { ...users[idx], ...data };
+                    assignments.forEach(a => { if (a.userId == editingUserId) a.userName = data.name; });
+                } else {
+                    users.push({ id: Date.now(), ...data });
+                }
+            } else {
+                apps.push({ id: Date.now(), name: document.getElementById('m-appname').value, link: document.getElementById('m-link').value });
+            }
+            localStorage.setItem('ap_users', JSON.stringify(users)); localStorage.setItem('ap_apps', JSON.stringify(apps));
+            localStorage.setItem('ap_assignments', JSON.stringify(assignments));
+            document.getElementById('registerModal').classList.add('hidden'); renderData();
+        }
+
+        function quickRenew(idx) {
+            const d = new Date(); d.setFullYear(d.getFullYear() + 1);
+            assignments[idx].expiry = d.toLocaleDateString();
+            localStorage.setItem('ap_assignments', JSON.stringify(assignments));
+            renderData();
+        }
+
+        function quickGrant() {
+            const uId = document.getElementById('form-user').value;
+            const usr = users.find(x => x.id == uId);
+            const app = document.getElementById('form-app').value;
+            if (!uId || !app) return alert("Select User & App");
+            const dt = document.getElementById('expiryType').value === 'auto' ? new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toLocaleDateString() : new Date(document.getElementById('form-custom-expiry').value).toLocaleDateString();
+            assignments.push({ id: Date.now(), userId: uId, userName: usr.name, appName: app, role: document.getElementById('form-role').value, authorizedBy: document.getElementById('form-auth').value, status: 'Active', date: new Date().toLocaleDateString(), expiry: dt });
+            localStorage.setItem('ap_assignments', JSON.stringify(assignments));
+            renderData(); document.getElementById('successMsg').innerText = "Access granted to " + usr.name; document.getElementById('successModal').classList.remove('hidden');
+        }
+
+        function updateFormOptions() {
+            const userId = document.getElementById('form-user').value;
+            const active = assignments.filter(a => a.userId == userId && a.status === 'Active').map(a => a.appName);
+            document.getElementById('form-app').innerHTML = '<option disabled selected value="">Choose App</option>' + apps.filter(ap => !active.includes(ap.name)).map(ap => `<option value="${ap.name}">${ap.name}</option>`).join('');
+        }
+
+        function autoSelectDept() {
+            const u = users.find(u => u.id == document.getElementById('form-user').value);
+            if (u) document.getElementById('form-role').value = u.dept;
+        }
+
+        applyTheme(); renderData();
+    </script>
+</body>
+
+</html>
